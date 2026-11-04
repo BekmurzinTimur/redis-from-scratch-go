@@ -10,9 +10,7 @@ import (
 	"strings"
 )
 
-// Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
-var _ = net.Listen
-var _ = os.Exit
+var store = map[string]string{}
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -52,7 +50,27 @@ func handleConnection(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		if strings.ToUpper(cmd) == "ECHO" {
+		switch strings.ToUpper(cmd) {
+		case "SET":
+			key, value := args[0], args[1]
+			store[key] = value
+			fmt.Println("Store:", store)
+			if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
+				return
+			}
+		case "GET":
+			key := args[0]
+			value, ok := store[key]
+			if !ok {
+				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
+					return
+				}
+			}
+			response := fmt.Sprintf("$%s\r\n%s\r\n", strconv.Itoa(len(value)), value)
+			if _, err := conn.Write([]byte(response)); err != nil {
+				return
+			}
+		case "ECHO":
 			var text string
 			for _, w := range args {
 				text = text + w
@@ -62,12 +80,15 @@ func handleConnection(conn net.Conn) {
 			if _, err := conn.Write([]byte(response)); err != nil {
 				return
 			}
-		} else if strings.ToUpper(cmd) == "PING" {
+		case "PING":
 			if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
 				return
 			}
+		default:
+			if _, err := conn.Write([]byte("Unkown command")); err != nil {
+				return
+			}
 		}
-
 	}
 }
 
