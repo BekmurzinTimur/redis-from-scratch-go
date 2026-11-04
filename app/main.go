@@ -53,7 +53,11 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 		if strings.ToUpper(cmd) == "ECHO" {
-			response := "$" + strconv.Itoa(len(args)) + "\r\n" + args + "\r\n"
+			var text string
+			for _, w := range args {
+				text = text + w
+			}
+			response := "$" + strconv.Itoa(len(text)) + "\r\n" + text + "\r\n"
 			fmt.Println(response)
 			if _, err := conn.Write([]byte(response)); err != nil {
 				return
