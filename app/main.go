@@ -8,8 +8,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
+var mu sync.RWMutex
 var store = map[string]string{}
 
 func main() {
@@ -52,21 +55,54 @@ func handleConnection(conn net.Conn) {
 		}
 		switch strings.ToUpper(cmd) {
 		case "SET":
+			if len(args) < 2 {
+				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+					return
+				}
+			}
 			key, value := args[0], args[1]
-			store[key] = value
+			LockedWrite(key, value)
+			for i := 2; i < len(args); i++ {
+				switch strings.ToUpper(args[i]) {
+				case "PX":
+					expiryTime, err := strconv.Atoi(args[i+1])
+					if err != nil {
+						return
+					}
+					time.AfterFunc(time.Duration(expiryTime)*time.Millisecond, func() {
+						LockedDelete(key)
+					})
+				case "EX":
+					expiryTime, err := strconv.Atoi(args[i+1])
+					if err != nil {
+						return
+					}
+					time.AfterFunc(time.Duration(expiryTime)*time.Second, func() {
+						LockedDelete(key)
+					})
+				}
+			}
 			fmt.Println("Store:", store)
 			if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
 				return
 			}
 		case "GET":
+			if len(args) < 1 {
+				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+					return
+				}
+			}
 			key := args[0]
+			mu.RLock()
 			value, ok := store[key]
+			mu.RUnlock()
 			if !ok {
 				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
 					return
 				}
+				continue
 			}
-			response := fmt.Sprintf("$%s\r\n%s\r\n", strconv.Itoa(len(value)), value)
+			response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 			if _, err := conn.Write([]byte(response)); err != nil {
 				return
 			}
@@ -85,7 +121,7 @@ func handleConnection(conn net.Conn) {
 				return
 			}
 		default:
-			if _, err := conn.Write([]byte("Unkown command")); err != nil {
+			if _, err := conn.Write([]byte("-ERR Unkown command\r\n")); err != nil {
 				return
 			}
 		}
@@ -114,4 +150,16 @@ func parseRESPCommand(cmd string) (string, []string, error) {
 		return parsedCommand[0], nil, nil
 	}
 	return parsedCommand[0], parsedCommand[1:], nil
+}
+
+func LockedWrite(key string, value string) {
+	mu.Lock()
+	store[key] = value
+	mu.Unlock()
+}
+
+func LockedDelete(key string) {
+	mu.Lock()
+	delete(store, key)
+	mu.Unlock()
 }
