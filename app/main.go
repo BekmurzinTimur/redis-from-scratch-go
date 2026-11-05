@@ -46,6 +46,8 @@ func handleConnection(conn net.Conn) {
 		}
 		fmt.Println(cmd, args, len(args))
 		switch strings.ToUpper(cmd) {
+		case "LPOP":
+			err = handleLPOP(conn, args)
 		case "LRANGE":
 			err = handleLRange(conn, args)
 		case "RPUSH":
@@ -69,6 +71,28 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+func handleLPOP(conn net.Conn, args []string) error {
+	if len(args) < 1 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	listKey := args[0]
+	value, ok := store.PopList(listKey)
+	if !ok {
+		if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func handleLLen(conn net.Conn, args []string) error {
