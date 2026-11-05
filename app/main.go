@@ -8,21 +8,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-var mu sync.RWMutex
-var store = map[string]string{}
-var listStore = map[string][]string{}
-var expiryStore = map[string]time.Time{}
-
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
 
-	// Uncomment the code below to pass the first stage
-	//
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
@@ -51,120 +41,192 @@ func handleConnection(conn net.Conn) {
 			break
 		}
 		cmd, args, err := parseRESPCommand(string(buf[:n]))
-		fmt.Println(cmd, args, len(args))
 		if err != nil {
 			return
 		}
+		fmt.Println(cmd, args, len(args))
 		switch strings.ToUpper(cmd) {
+		case "LRANGE":
+			err = handleLRange(conn, args)
 		case "RPUSH":
-			if len(args) < 2 {
-				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
-					return
-				}
-				continue
-			}
-			lisKey, values := args[0], args[1:]
-			length := LockedWriteList(lisKey, values)
-			response := fmt.Sprintf(":%d\r\n", length)
-			if _, err := conn.Write([]byte(response)); err != nil {
-				return
-			}
+			err = handleRPush(conn, args)
 		case "SET":
-			if len(args) < 2 {
-				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
-					return
-				}
-				continue
-			}
-			key, value := args[0], args[1]
-			LockedWrite(key, value)
-			if len(args) == 2 {
-				LockedDeleteExpiry(key)
-			}
-		outer:
-			for i := 2; i < len(args); i++ {
-				switch strings.ToUpper(args[i]) {
-				case "PX":
-					expiryTime, err := strconv.Atoi(args[i+1])
-					if err != nil {
-						return
-					}
-					dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Millisecond)
-
-					fmt.Println("dateOfExpiry", dateOfExpiry)
-					LockedWriteExpiry(key, dateOfExpiry)
-					break outer
-				case "EX":
-					expiryTime, err := strconv.Atoi(args[i+1])
-					if err != nil {
-						return
-					}
-					dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Second)
-					LockedWriteExpiry(key, dateOfExpiry)
-					break outer
-				default:
-					LockedDeleteExpiry(key)
-				}
-
-			}
-			fmt.Println("Store:", store)
-			if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
-				return
-			}
+			err = handleSet(conn, args)
 		case "GET":
-			if len(args) < 1 {
-				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
-					return
-				}
-			}
-			key := args[0]
-			value, ok := LockedRead(key)
-			if !ok {
-				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
-					return
-				}
-				continue
-			}
-			dateOfExpiry, ok := LockedReadExpiry(key)
-			fmt.Println("Now", time.Now())
-			fmt.Println("Expiry", dateOfExpiry)
-			if ok && dateOfExpiry.Before(time.Now()) {
-				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
-					return
-				}
-				continue
-			}
-			response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
-			if _, err := conn.Write([]byte(response)); err != nil {
-				return
-			}
+			err = handleGet(conn, args)
 		case "ECHO":
-			var text string
-			for _, w := range args {
-				text = text + w
-			}
-			response := "$" + strconv.Itoa(len(text)) + "\r\n" + text + "\r\n"
-			fmt.Println(response)
-			if _, err := conn.Write([]byte(response)); err != nil {
-				return
-			}
+			err = handleEcho(conn, args)
 		case "PING":
-			if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
-				return
-			}
+			err = handlePing(conn, args)
 		default:
-			if _, err := conn.Write([]byte("-ERR Unkown command\r\n")); err != nil {
-				return
-			}
+			err = handleUnknown(conn, args)
+		}
+		if err != nil {
+			return
 		}
 	}
+}
+
+func handleLRange(conn net.Conn, args []string) error {
+	if len(args) < 3 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	key, startString, stopString := args[0], args[1], args[2]
+	start, err := strconv.Atoi(startString)
+	if err != nil {
+		return err
+	}
+	stop, err := strconv.Atoi(stopString)
+	if err != nil {
+		return err
+	}
+	list, ok := store.GetList(key, start, stop)
+	if !ok {
+		if _, err := conn.Write([]byte("*0\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	var response string
+	length := len(list)
+	if length == 0 {
+		response = "*0\r\n"
+	} else {
+		response = "*" + strconv.Itoa(length) + "\r\n"
+		for _, w := range list {
+			response += "$" + strconv.Itoa(len(w)) + "\r\n" + w + "\r\n"
+		}
+	}
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleRPush(conn net.Conn, args []string) error {
+	if len(args) < 2 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	listKey, values := args[0], args[1:]
+	length := store.SetList(listKey, values)
+	response := fmt.Sprintf(":%d\r\n", length)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleSet(conn net.Conn, args []string) error {
+	if len(args) < 2 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	key, value := args[0], args[1]
+	store.Set(key, value)
+	if len(args) == 2 {
+		store.DeleteExpiry(key)
+	}
+outer:
+	for i := 2; i < len(args); i++ {
+		switch strings.ToUpper(args[i]) {
+		case "PX":
+			expiryTime, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return err
+			}
+			dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Millisecond)
+
+			fmt.Println("dateOfExpiry", dateOfExpiry)
+			store.SetExpiry(key, dateOfExpiry)
+			break outer
+		case "EX":
+			expiryTime, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return err
+			}
+			dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Second)
+			store.SetExpiry(key, dateOfExpiry)
+			break outer
+		default:
+			store.DeleteExpiry(key)
+		}
+
+	}
+	if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleGet(conn net.Conn, args []string) error {
+	if len(args) < 1 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+	}
+	key := args[0]
+	value, ok := store.Get(key)
+	if !ok {
+		if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	dateOfExpiry, ok := store.GetExpiry(key)
+	fmt.Println("Now", time.Now())
+	fmt.Println("Expiry", dateOfExpiry)
+	if ok && dateOfExpiry.Before(time.Now()) {
+		if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleEcho(conn net.Conn, args []string) error {
+	var text string
+	for _, w := range args {
+		text = text + w
+	}
+	response := "$" + strconv.Itoa(len(text)) + "\r\n" + text + "\r\n"
+	fmt.Println(response)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handlePing(conn net.Conn, args []string) error {
+	if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleUnknown(conn net.Conn, args []string) error {
+	if _, err := conn.Write([]byte("-ERR Unkown command\r\n")); err != nil {
+		return err
+	}
+	return nil
 }
 
 func parseRESPCommand(cmd string) (string, []string, error) {
 	cmdParts := strings.SplitN(cmd, "\r\n", 2)
 	if len(cmdParts) < 2 {
-		fmt.Println("Invalid RESP command")
-		return "", nil, errors.New("Invalid RESP command")
+		return "", nil, errors.New("invalid RESP command")
 	}
 	_, rest := cmdParts[0], cmdParts[1]
 
@@ -176,56 +238,9 @@ func parseRESPCommand(cmd string) (string, []string, error) {
 		}
 	}
 	if len(parsedCommand) == 0 {
-		fmt.Println("Invalid RESP command")
-		return "", nil, errors.New("Invalid RESP command")
+		return "", nil, errors.New("invalid RESP command")
 	} else if len(parsedCommand) == 1 {
 		return parsedCommand[0], nil, nil
 	}
 	return parsedCommand[0], parsedCommand[1:], nil
-}
-
-func LockedRead(key string) (string, bool) {
-	mu.RLock()
-	value, ok := store[key]
-	mu.RUnlock()
-	return value, ok
-}
-
-func LockedWrite(key string, value string) {
-	mu.Lock()
-	store[key] = value
-	mu.Unlock()
-}
-
-func LockedDelete(key string) {
-	mu.Lock()
-	delete(store, key)
-	mu.Unlock()
-}
-
-func LockedReadExpiry(key string) (time.Time, bool) {
-	mu.RLock()
-	value, ok := expiryStore[key]
-	mu.RUnlock()
-	return value, ok
-}
-
-func LockedWriteExpiry(key string, _time time.Time) {
-	mu.Lock()
-	expiryStore[key] = _time
-	mu.Unlock()
-}
-
-func LockedDeleteExpiry(key string) {
-	mu.Lock()
-	delete(expiryStore, key)
-	mu.Unlock()
-}
-
-func LockedWriteList(key string, items []string) int {
-	mu.Lock()
-	listStore[key] = append(listStore[key], items...)
-	mu.Unlock()
-	length := len(listStore[key])
-	return length
 }
