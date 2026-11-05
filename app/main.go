@@ -63,8 +63,8 @@ func handleConnection(conn net.Conn) {
 				}
 				continue
 			}
-			lisKey, value := args[0], args[1]
-			length := LockedWriteList(lisKey, value)
+			lisKey, values := args[0], args[1:]
+			length := LockedWriteList(lisKey, values)
 			response := fmt.Sprintf(":%d\r\n", length)
 			if _, err := conn.Write([]byte(response)); err != nil {
 				return
@@ -222,9 +222,9 @@ func LockedDeleteExpiry(key string) {
 	mu.Unlock()
 }
 
-func LockedWriteList(key string, item string) int {
+func LockedWriteList(key string, items []string) int {
 	mu.Lock()
-	listStore[key] = append(listStore[key], item)
+	listStore[key] = append(listStore[key], items...)
 	mu.Unlock()
 	length := len(listStore[key])
 	return length
