@@ -171,6 +171,7 @@ func handleGet(conn net.Conn, args []string) error {
 		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
 			return err
 		}
+		return nil
 	}
 	key := args[0]
 	value, ok := store.Get(key)

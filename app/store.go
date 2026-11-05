@@ -49,14 +49,24 @@ func (s *Store) GetList(key string, start int, stop int) ([]string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	list, ok := s.lists[key]
-	if start >= len(list) {
+	length := len(list)
+	if start < 0 {
+		start = max(0, start+length)
+	}
+	if stop < 0 {
+		stop = stop + length
+		if stop < 0 {
+			return []string{}, ok
+		}
+	}
+	if start >= length {
 		return []string{}, ok
 	}
 	if start > stop {
 		return []string{}, ok
 	}
 
-	return list[start:min(stop+1, len(list))], ok
+	return list[start:min(stop+1, length)], ok
 }
 
 func (s *Store) SetExpiry(key string, expiryDate time.Time) {
