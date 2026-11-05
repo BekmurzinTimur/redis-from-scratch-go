@@ -14,6 +14,8 @@ import (
 
 var mu sync.RWMutex
 var store = map[string]string{}
+var listStore = map[string][]string{}
+var expiryStore = map[string]time.Time{}
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -54,14 +56,32 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 		switch strings.ToUpper(cmd) {
+		case "RPUSH":
+			if len(args) < 2 {
+				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+					return
+				}
+				continue
+			}
+			lisKey, value := args[0], args[1]
+			length := LockedWriteList(lisKey, value)
+			response := fmt.Sprintf(":%d\r\n", length)
+			if _, err := conn.Write([]byte(response)); err != nil {
+				return
+			}
 		case "SET":
 			if len(args) < 2 {
 				if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
 					return
 				}
+				continue
 			}
 			key, value := args[0], args[1]
 			LockedWrite(key, value)
+			if len(args) == 2 {
+				LockedDeleteExpiry(key)
+			}
+		outer:
 			for i := 2; i < len(args); i++ {
 				switch strings.ToUpper(args[i]) {
 				case "PX":
@@ -69,18 +89,23 @@ func handleConnection(conn net.Conn) {
 					if err != nil {
 						return
 					}
-					time.AfterFunc(time.Duration(expiryTime)*time.Millisecond, func() {
-						LockedDelete(key)
-					})
+					dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Millisecond)
+
+					fmt.Println("dateOfExpiry", dateOfExpiry)
+					LockedWriteExpiry(key, dateOfExpiry)
+					break outer
 				case "EX":
 					expiryTime, err := strconv.Atoi(args[i+1])
 					if err != nil {
 						return
 					}
-					time.AfterFunc(time.Duration(expiryTime)*time.Second, func() {
-						LockedDelete(key)
-					})
+					dateOfExpiry := time.Now().Add(time.Duration(expiryTime) * time.Second)
+					LockedWriteExpiry(key, dateOfExpiry)
+					break outer
+				default:
+					LockedDeleteExpiry(key)
 				}
+
 			}
 			fmt.Println("Store:", store)
 			if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
@@ -93,10 +118,17 @@ func handleConnection(conn net.Conn) {
 				}
 			}
 			key := args[0]
-			mu.RLock()
-			value, ok := store[key]
-			mu.RUnlock()
+			value, ok := LockedRead(key)
 			if !ok {
+				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
+					return
+				}
+				continue
+			}
+			dateOfExpiry, ok := LockedReadExpiry(key)
+			fmt.Println("Now", time.Now())
+			fmt.Println("Expiry", dateOfExpiry)
+			if ok && dateOfExpiry.Before(time.Now()) {
 				if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
 					return
 				}
@@ -152,6 +184,13 @@ func parseRESPCommand(cmd string) (string, []string, error) {
 	return parsedCommand[0], parsedCommand[1:], nil
 }
 
+func LockedRead(key string) (string, bool) {
+	mu.RLock()
+	value, ok := store[key]
+	mu.RUnlock()
+	return value, ok
+}
+
 func LockedWrite(key string, value string) {
 	mu.Lock()
 	store[key] = value
@@ -162,4 +201,31 @@ func LockedDelete(key string) {
 	mu.Lock()
 	delete(store, key)
 	mu.Unlock()
+}
+
+func LockedReadExpiry(key string) (time.Time, bool) {
+	mu.RLock()
+	value, ok := expiryStore[key]
+	mu.RUnlock()
+	return value, ok
+}
+
+func LockedWriteExpiry(key string, _time time.Time) {
+	mu.Lock()
+	expiryStore[key] = _time
+	mu.Unlock()
+}
+
+func LockedDeleteExpiry(key string) {
+	mu.Lock()
+	delete(expiryStore, key)
+	mu.Unlock()
+}
+
+func LockedWriteList(key string, item string) int {
+	mu.Lock()
+	listStore[key] = append(listStore[key], item)
+	mu.Unlock()
+	length := len(listStore[key])
+	return length
 }
