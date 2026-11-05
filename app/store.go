@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -37,10 +38,19 @@ func (s *Store) Delete(key string) {
 	delete(s.strings, key)
 }
 
-func (s *Store) SetList(key string, items []string) int {
+func (s *Store) AppendList(key string, items []string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lists[key] = append(s.lists[key], items...)
+	length := len(s.lists[key])
+	return length
+}
+
+func (s *Store) PrependList(key string, items []string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	slices.Reverse(items)
+	s.lists[key] = append(items, s.lists[key]...)
 	length := len(s.lists[key])
 	return length
 }

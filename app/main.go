@@ -50,6 +50,8 @@ func handleConnection(conn net.Conn) {
 			err = handleLRange(conn, args)
 		case "RPUSH":
 			err = handleRPush(conn, args)
+		case "LPUSH":
+			err = handleLPush(conn, args)
 		case "SET":
 			err = handleSet(conn, args)
 		case "GET":
@@ -114,7 +116,22 @@ func handleRPush(conn net.Conn, args []string) error {
 		return nil
 	}
 	listKey, values := args[0], args[1:]
-	length := store.SetList(listKey, values)
+	length := store.AppendList(listKey, values)
+	response := fmt.Sprintf(":%d\r\n", length)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
+}
+func handleLPush(conn net.Conn, args []string) error {
+	if len(args) < 2 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	listKey, values := args[0], args[1:]
+	length := store.PrependList(listKey, values)
 	response := fmt.Sprintf(":%d\r\n", length)
 	if _, err := conn.Write([]byte(response)); err != nil {
 		return err
