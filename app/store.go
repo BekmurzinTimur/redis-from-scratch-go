@@ -55,6 +55,14 @@ func (s *Store) PrependList(key string, items []string) int {
 	return length
 }
 
+func (s *Store) GetListLength(key string) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, ok := s.lists[key]
+	length := len(list)
+	return length, ok
+}
+
 func (s *Store) GetList(key string, start int, stop int) ([]string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

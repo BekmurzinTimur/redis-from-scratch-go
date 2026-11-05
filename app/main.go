@@ -52,6 +52,8 @@ func handleConnection(conn net.Conn) {
 			err = handleRPush(conn, args)
 		case "LPUSH":
 			err = handleLPush(conn, args)
+		case "LLEN":
+			err = handleLLen(conn, args)
 		case "SET":
 			err = handleSet(conn, args)
 		case "GET":
@@ -67,6 +69,29 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+func handleLLen(conn net.Conn, args []string) error {
+	if len(args) == 0 {
+		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	key := args[0]
+	length, ok := store.GetListLength(key)
+	if !ok {
+		if _, err := conn.Write([]byte(":0\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	response := fmt.Sprintf(":%d\r\n", length)
+	if _, err := conn.Write([]byte(response)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func handleLRange(conn net.Conn, args []string) error {
