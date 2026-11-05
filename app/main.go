@@ -74,6 +74,8 @@ func handleConnection(conn net.Conn) {
 }
 
 func handleLPOP(conn net.Conn, args []string) error {
+	var amount = 0
+	var err error
 	if len(args) < 1 {
 		if _, err := conn.Write([]byte("-ERR wrong number of arguments\r\n")); err != nil {
 			return err
@@ -81,14 +83,37 @@ func handleLPOP(conn net.Conn, args []string) error {
 		return nil
 	}
 	listKey := args[0]
-	value, ok := store.PopList(listKey)
+	if len(args) == 2 {
+		amount, err = strconv.Atoi(args[1])
+	}
+	if err != nil {
+		if _, err := conn.Write([]byte("-ERR cant parse pop argument\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	if amount < 0 {
+		if _, err := conn.Write([]byte("-ERR value is out of range, must be positive\r\n")); err != nil {
+			return err
+		}
+		return nil
+	}
+	values, ok := store.PopList(listKey, amount)
 	if !ok {
 		if _, err := conn.Write([]byte("$-1\r\n")); err != nil {
 			return err
 		}
 		return nil
 	}
-	response := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+	var response string
+	if len(values) > 1 {
+		response = fmt.Sprintf("*%d\r\n", len(values))
+		for _, value := range values {
+			response += fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+		}
+	} else {
+		response = fmt.Sprintf("$%d\r\n%s\r\n", len(values[0]), values[0])
+	}
 	if _, err := conn.Write([]byte(response)); err != nil {
 		return err
 	}

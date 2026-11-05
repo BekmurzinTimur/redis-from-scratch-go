@@ -55,16 +55,23 @@ func (s *Store) PrependList(key string, items []string) int {
 	return length
 }
 
-func (s *Store) PopList(key string) (string, bool) {
+func (s *Store) PopList(key string, a int) ([]string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list, ok := s.lists[key]
-	if len(list) == 0 {
-		return "", false
+	length := len(list)
+	if length == 0 {
+		return []string{}, false
 	}
-	first := list[0]
-	s.lists[key] = list[1:]
-	return first, ok
+	if a == 0 {
+		values := list[0:1]
+		s.lists[key] = list[1:]
+		return values, ok
+	}
+	amount := min(a, length)
+	values := list[0:amount]
+	s.lists[key] = list[amount:]
+	return values, ok
 }
 
 func (s *Store) GetListLength(key string) (int, bool) {
